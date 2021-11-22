@@ -223,7 +223,7 @@ async fn main() {
         )
         .arg(
             Arg::with_name("RPC_ENDPOINT")
-                .help("JSON-RPC endpoint to forward incoming requests to")
+                .help("JSON-RPC endpoint to forward incoming requests")
                 .required(true)
                 .index(1),
         )
