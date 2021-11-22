@@ -211,6 +211,7 @@ async fn main() {
                 .long("suppress-ok")
                 .help("Suppress successful JSON RPC method calls of this type in output (can specify more than one)")
                 .multiple(true)
+                .number_of_values(1)
                 .takes_value(true),
         )
         .arg(
@@ -219,6 +220,7 @@ async fn main() {
                 .long("suppress-all")
                 .help("Suppress success or error JSON RPC method calls of this type in output (can specify more than one)")
                 .multiple(true)
+                .number_of_values(1)
                 .takes_value(true),
         )
         .arg(

@@ -29,12 +29,16 @@ ARGS:
     <RPC_ENDPOINT>    JSON-RPC endpoint to forward incoming requests
 ```
 
-## Example
+## Example Usage
 If you have a JSON-RPC endpoint at `http://localhost:8545` and you want to run
-the proxy on port 8560 and suppress successful `eth_getBlockByHash` requests
+the proxy on port `8560` and suppress successful `eth_getBlockByHash` requests
 you would run:
 
 ```
 ./target/release/json_rpc_snoop -s eth_getBlockByHash -p 8560 http://localhost:8545
 ```
+
+## Example Output
+
+![example output png](https://i.imgur.com/NLzu4qo.png)
 
