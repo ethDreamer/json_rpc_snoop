@@ -1,15 +1,16 @@
 [package]
-name = "json_snoop"
+name = "json_rpc_snoop"
 version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-hyper = { version = "0.14.15", features = ["client", "http1", "server", "tcp"] }
-tokio = { version = "1.14.0", features = ["macros", "rt-multi-thread"] }
-serde = { version = "1.0.130", features = ["derive"] }
+chrono = "0.4.19"
 clap = "2.33.3"
-serde_json = "1.0.71"
+hyper = { version = "0.14.15", features = ["client", "http1", "server", "tcp"] }
 jsonxf = "1.1.1"
-colour = "0.6.0"
+serde = { version = "1.0.130", features = ["derive"] }
+serde_json = "1.0.71"
+termion = "1.5.6"
+tokio = { version = "1.14.0", features = ["macros", "rt-multi-thread"] }
