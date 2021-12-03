@@ -45,6 +45,10 @@ async fn copy_request(
         .body(Body::from(request_bytes))?;
 
     for (key, value) in parts.headers.iter() {
+        if key.as_str().eq("accept-encoding") {
+            // we don't want fancy encoding of the response
+            continue;
+        }
         dest_request
             .headers_mut()
             .insert(key.clone(), value.clone());
