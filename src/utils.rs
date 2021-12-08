@@ -30,7 +30,7 @@ impl From<Utf8Error> for SnoopError {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct RpcRequest {
-    pub id: u8,
+    pub id: u64,
     pub jsonrpc: String,
     pub method: String,
     pub params: Vec<serde_json::Value>,
@@ -42,7 +42,7 @@ pub struct RpcError {
 }
 #[derive(Debug, Deserialize, Serialize)]
 pub struct RpcErrorResponse {
-    pub id: u8,
+    pub id: u64,
     pub jsonrpc: String,
     pub error: RpcError,
 }

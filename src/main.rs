@@ -118,10 +118,10 @@ fn print_request_response(request_json: String, response_json: String, context: 
                 println!("{} RESPONSE\n{}{}{}", now, green, response_json, reset);
             }
         }
-        (Err(_), err_res) => {
+        (Err(e), err_res) => {
             println!(
-                "{} WARNING: request not formatted as JSON-RPC request:\n{}",
-                now, request_json,
+                "{} WARNING: request not formatted as JSON-RPC request [{}]:\n{}",
+                now, e, request_json,
             );
             let color = match err_res {
                 Ok(_) => red,
