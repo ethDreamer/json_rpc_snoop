@@ -2,28 +2,45 @@ use chrono;
 use clap::{App, Arg};
 use hyper::server::conn::AddrStream;
 use hyper::service::{make_service_fn, service_fn};
-use hyper::{Body, Client, Request, Response, Server};
+use hyper::{Body, Client, Request, Response, Server, Uri};
 use std::collections::HashSet;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
-use termion::color;
+use hyper::http::header::{HeaderMap, HeaderName, HeaderValue};
+use hyper::http::uri::Scheme;
+use hyper_tls::HttpsConnector;
 
 mod utils;
 use utils::{RpcErrorResponse, RpcRequest, SnoopError};
+mod colors;
+use colors::{color_treat, Colors};
 
 struct Inner {
-    dest_uri: String,
+    dest_uri: Uri,
     suppress_ok: Option<HashSet<String>>,
     suppress_all: Option<HashSet<String>>,
-    //      (cyan,   red,    green,  reset)
-    colors: (String, String, String, String),
+    colors: Colors,
+    log_headers: bool,
 }
 
 #[derive(Clone)]
 struct SnoopContext {
     inner: Arc<Inner>,
+}
+
+fn get_hostport(uri: &Uri) -> HeaderValue {
+    let mut hostport = String::new();
+    if let Some(host) = uri.host() {
+        hostport.push_str(host);
+    }
+    if let Some(port) = uri.port() {
+        hostport.push_str(":");
+        hostport.push_str(port.as_str());
+    }
+
+    HeaderValue::from_str(&hostport).expect("should be valid header")
 }
 
 async fn copy_request(
@@ -45,25 +62,34 @@ async fn copy_request(
         .body(Body::from(request_bytes))?;
 
     for (key, value) in parts.headers.iter() {
+        let mut value = value.clone();
         if key.as_str().eq("accept-encoding") {
             // we don't want fancy encoding of the response
             continue;
         }
+        if key.as_str().eq("host") {
+            value = get_hostport(&context.inner.dest_uri)
+        }
         dest_request
             .headers_mut()
-            .insert(key.clone(), value.clone());
+            .insert(key.clone(), value);
     }
 
     Ok((dest_request, request_json))
 }
 
-async fn get_response(dest_request: Request<Body>) -> Result<(Response<Body>, String), SnoopError> {
-    let dest_client = Client::new();
-    let response = dest_client.request(dest_request).await?;
+async fn get_response(dest_request: Request<Body>, context: &SnoopContext) -> Result<(Response<Body>, String), SnoopError> {
+    let response = if context.inner.dest_uri.scheme() == Some(&Scheme::HTTPS) {
+        let https = HttpsConnector::new();
+        let dest_client = Client::builder().build::<_, hyper::Body>(https);
+        dest_client.request(dest_request).await?
+    } else {
+        let dest_client = Client::new();
+        dest_client.request(dest_request).await?
+    };
 
-    let response_status = response.status();
-    let response_version = response.version();
-    let response_bytes = hyper::body::to_bytes(response.into_body()).await?;
+    let (parts, response_body) = response.into_parts();
+    let response_bytes = hyper::body::to_bytes(response_body).await?;
 
     let response_json = {
         // Just return an error response if Utf8 conversion fails
@@ -71,19 +97,44 @@ async fn get_response(dest_request: Request<Body>) -> Result<(Response<Body>, St
         jsonxf::pretty_print(json_str).unwrap_or_else(|_| json_str.to_string())
     };
 
-    let source_response = Response::builder()
-        .status(response_status)
-        .version(response_version)
+    let mut source_response = Response::builder()
+        .status(parts.status)
+        .version(parts.version)
         .body(Body::from(response_bytes))?;
+
+    for (key, value) in parts.headers.iter() {
+        source_response
+            .headers_mut()
+            .insert(key.clone(), value.clone());
+    }
 
     Ok((source_response, response_json))
 }
 
-fn print_request_response(request_json: String, response_json: String, context: &SnoopContext) {
-    let (cyan, red, green, reset) = &context.inner.colors;
+
+fn print_request_response(
+    request_json: String,
+    response_json: String,
+    request_headers: Vec<(HeaderName, HeaderValue)>,
+    response_headers: Vec<(HeaderName, HeaderValue)>,
+    context: &SnoopContext,
+) {
     let now = chrono::offset::Local::now()
         .format("%b %e %T%.3f %Y")
         .to_string();
+
+    let header_string = |headers: Vec<(HeaderName, HeaderValue)>, context: &SnoopContext| -> String {
+        if !context.inner.log_headers || headers.is_empty() {
+            String::new()
+        } else {
+            let mut result = String::from("headers:\n");
+            for (key, value) in headers {
+                result.push_str(&format!("    ({},{:?})\n", key, value))
+            }
+            result
+        }
+    };
+
     match (
         serde_json::from_str::<RpcRequest>(&request_json),
         serde_json::from_str::<RpcErrorResponse>(&response_json),
@@ -96,8 +147,8 @@ fn print_request_response(request_json: String, response_json: String, context: 
                 .map(|all| all.contains(&rpc_request.method.to_string()))
                 .unwrap_or(false)
             {
-                println!("{} REQUEST\n{}{}{}", now, cyan, request_json, reset);
-                println!("{} RESPONSE\n{}{}{}", now, red, response_json, reset);
+                println!("{} REQUEST\n{}{}", now, header_string(request_headers, context), color_treat(request_json, context.inner.colors.cyan));
+                println!("{} RESPONSE\n{}{}", now, header_string(response_headers, context), color_treat(response_json, context.inner.colors.red));
             }
         }
         (Ok(rpc_request), Err(_)) => {
@@ -114,27 +165,34 @@ fn print_request_response(request_json: String, response_json: String, context: 
                     .map(|ok| ok.contains(&rpc_request.method.to_string()))
                     .unwrap_or(false)
             {
-                println!("{} REQUEST\n{}{}{}", now, cyan, request_json, reset);
-                println!("{} RESPONSE\n{}{}{}", now, green, response_json, reset);
+                println!("{} REQUEST\n{}{}", now, header_string(request_headers, context), color_treat(request_json, context.inner.colors.cyan));
+                println!("{} RESPONSE\n{}{}", now, header_string(response_headers, context), color_treat(response_json, context.inner.colors.green));
             }
         }
         (Err(e), err_res) => {
             println!(
-                "{} WARNING: request not formatted as JSON-RPC request [{}]:\n{}",
-                now, e, request_json,
+                "{} WARNING: request not formatted as JSON-RPC request [{}]:\n{}{}",
+                now, e, header_string(request_headers, context), color_treat(request_json, context.inner.colors.cyan),
             );
             let color = match err_res {
-                Ok(_) => red,
-                Err(_) => green,
+                Ok(_) => context.inner.colors.red,
+                Err(_) => context.inner.colors.green,
             };
-            println!("{} RESPONSE\n{}{}{}", now, color, response_json, reset);
+            println!("{} RESPONSE\n{}{}", now, header_string(response_headers, context), color_treat(response_json, color));
         }
     }
 }
 
+fn copy_headers(headers: &HeaderMap<HeaderValue>) -> Vec<(HeaderName, HeaderValue)> {
+    headers
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect()
+}
+
 async fn handle_request(
     context: SnoopContext,
-    _addr: SocketAddr,
+    _address: SocketAddr,
     source_request: Request<Body>,
 ) -> Result<Response<Body>, Infallible> {
     let (dest_request, request_json) = match copy_request(source_request, &context).await {
@@ -145,8 +203,7 @@ async fn handle_request(
                 serde_json::to_string_pretty(&rpc_error)
                     .unwrap_or_else(|_| serde_json::json!(rpc_error).to_string())
             };
-            let (_, red, _, reset) = &context.inner.colors;
-            println!("{}{}{}", red, error_body, reset);
+            println!("{}", color_treat(error_body.clone(), context.inner.colors.red));
             let source_response = Response::builder()
                 .status(500)
                 .body(Body::from(error_body))
@@ -155,8 +212,9 @@ async fn handle_request(
             return Ok(source_response);
         }
     };
+    let request_headers = copy_headers(dest_request.headers());
 
-    let (source_response, response_json) = match get_response(dest_request).await {
+    let (source_response, response_json) = match get_response(dest_request, &context).await {
         Ok(result) => result,
         Err(e) => {
             let error_body = {
@@ -172,7 +230,13 @@ async fn handle_request(
         }
     };
 
-    print_request_response(request_json, response_json, &context);
+    print_request_response(
+        request_json,
+        response_json,
+        request_headers,
+        copy_headers(source_response.headers()),
+        &context
+    );
 
     Ok(source_response)
 }
@@ -200,6 +264,14 @@ async fn main() {
                 .required(false)
                 .default_value("3000")
                 .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("log-headers")
+                .short("l")
+                .long("log-headers")
+                .help("Print the headers in addition to request/response")
+                .required(false)
+                .takes_value(false),
         )
         .arg(
             Arg::with_name("no-color")
@@ -235,27 +307,25 @@ async fn main() {
         )
         .get_matches();
 
-    let color_tuple = if matches.is_present("no-color") {
-        (String::new(), String::new(), String::new(), String::new())
-    } else {
-        (
-            color::Fg(color::Cyan).to_string(),
-            color::Fg(color::Red).to_string(),
-            color::Fg(color::Green).to_string(),
-            color::Fg(color::Reset).to_string(),
-        )
+    let dest_uri: Uri = match matches.value_of("RPC_ENDPOINT").unwrap().parse() {
+        Ok(uri) => uri,
+        Err(e) => {
+            eprintln!("Unable to parse Uri from {}: {}", matches.value_of("RPC_ENDPOINT").unwrap(), e);
+            return;
+        }
     };
 
     let context = SnoopContext {
         inner: Arc::new(Inner {
-            dest_uri: matches.value_of("RPC_ENDPOINT").unwrap().to_string(),
-            colors: color_tuple,
+            dest_uri,
             suppress_ok: matches
                 .values_of("suppress-ok")
                 .map(|values| values.into_iter().map(|s| s.to_string()).collect()),
             suppress_all: matches
                 .values_of("suppress-all")
                 .map(|values| values.into_iter().map(|s| s.to_string()).collect()),
+            colors: Colors::new(matches.is_present("no-color")),
+            log_headers: matches.is_present("log-headers"),
         }),
     };
 
