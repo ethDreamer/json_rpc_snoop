@@ -1,16 +1,16 @@
 use chrono;
 use clap::{App, Arg};
+use hyper::http::header::{HeaderMap, HeaderName, HeaderValue};
+use hyper::http::uri::Scheme;
 use hyper::server::conn::AddrStream;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Client, Request, Response, Server, Uri};
+use hyper_tls::HttpsConnector;
 use std::collections::HashSet;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
-use hyper::http::header::{HeaderMap, HeaderName, HeaderValue};
-use hyper::http::uri::Scheme;
-use hyper_tls::HttpsConnector;
 
 mod utils;
 use utils::{RpcErrorResponse, RpcRequest, SnoopError};
@@ -70,15 +70,16 @@ async fn copy_request(
         if key.as_str().eq("host") {
             value = get_hostport(&context.inner.dest_uri)
         }
-        dest_request
-            .headers_mut()
-            .insert(key.clone(), value);
+        dest_request.headers_mut().insert(key.clone(), value);
     }
 
     Ok((dest_request, request_json))
 }
 
-async fn get_response(dest_request: Request<Body>, context: &SnoopContext) -> Result<(Response<Body>, String), SnoopError> {
+async fn get_response(
+    dest_request: Request<Body>,
+    context: &SnoopContext,
+) -> Result<(Response<Body>, String), SnoopError> {
     let response = if context.inner.dest_uri.scheme() == Some(&Scheme::HTTPS) {
         let https = HttpsConnector::new();
         let dest_client = Client::builder().build::<_, hyper::Body>(https);
@@ -111,7 +112,6 @@ async fn get_response(dest_request: Request<Body>, context: &SnoopContext) -> Re
     Ok((source_response, response_json))
 }
 
-
 fn print_request_response(
     request_json: String,
     response_json: String,
@@ -123,17 +123,18 @@ fn print_request_response(
         .format("%b %e %T%.3f %Y")
         .to_string();
 
-    let header_string = |headers: Vec<(HeaderName, HeaderValue)>, context: &SnoopContext| -> String {
-        if !context.inner.log_headers || headers.is_empty() {
-            String::new()
-        } else {
-            let mut result = String::from("headers:\n");
-            for (key, value) in headers {
-                result.push_str(&format!("    ({},{:?})\n", key, value))
+    let header_string =
+        |headers: Vec<(HeaderName, HeaderValue)>, context: &SnoopContext| -> String {
+            if !context.inner.log_headers || headers.is_empty() {
+                String::new()
+            } else {
+                let mut result = String::from("headers:\n");
+                for (key, value) in headers {
+                    result.push_str(&format!("    ({},{:?})\n", key, value))
+                }
+                result
             }
-            result
-        }
-    };
+        };
 
     match (
         serde_json::from_str::<RpcRequest>(&request_json),
@@ -147,8 +148,18 @@ fn print_request_response(
                 .map(|all| all.contains(&rpc_request.method.to_string()))
                 .unwrap_or(false)
             {
-                println!("{} REQUEST\n{}{}", now, header_string(request_headers, context), color_treat(request_json, context.inner.colors.cyan));
-                println!("{} RESPONSE\n{}{}", now, header_string(response_headers, context), color_treat(response_json, context.inner.colors.red));
+                println!(
+                    "{} REQUEST\n{}{}",
+                    now,
+                    header_string(request_headers, context),
+                    color_treat(request_json, context.inner.colors.cyan)
+                );
+                println!(
+                    "{} RESPONSE\n{}{}",
+                    now,
+                    header_string(response_headers, context),
+                    color_treat(response_json, context.inner.colors.red)
+                );
             }
         }
         (Ok(rpc_request), Err(_)) => {
@@ -165,20 +176,38 @@ fn print_request_response(
                     .map(|ok| ok.contains(&rpc_request.method.to_string()))
                     .unwrap_or(false)
             {
-                println!("{} REQUEST\n{}{}", now, header_string(request_headers, context), color_treat(request_json, context.inner.colors.cyan));
-                println!("{} RESPONSE\n{}{}", now, header_string(response_headers, context), color_treat(response_json, context.inner.colors.green));
+                println!(
+                    "{} REQUEST\n{}{}",
+                    now,
+                    header_string(request_headers, context),
+                    color_treat(request_json, context.inner.colors.cyan)
+                );
+                println!(
+                    "{} RESPONSE\n{}{}",
+                    now,
+                    header_string(response_headers, context),
+                    color_treat(response_json, context.inner.colors.green)
+                );
             }
         }
         (Err(e), err_res) => {
             println!(
                 "{} WARNING: request not formatted as JSON-RPC request [{}]:\n{}{}",
-                now, e, header_string(request_headers, context), color_treat(request_json, context.inner.colors.cyan),
+                now,
+                e,
+                header_string(request_headers, context),
+                color_treat(request_json, context.inner.colors.cyan),
             );
             let color = match err_res {
                 Ok(_) => context.inner.colors.red,
                 Err(_) => context.inner.colors.green,
             };
-            println!("{} RESPONSE\n{}{}", now, header_string(response_headers, context), color_treat(response_json, color));
+            println!(
+                "{} RESPONSE\n{}{}",
+                now,
+                header_string(response_headers, context),
+                color_treat(response_json, color)
+            );
         }
     }
 }
@@ -203,7 +232,10 @@ async fn handle_request(
                 serde_json::to_string_pretty(&rpc_error)
                     .unwrap_or_else(|_| serde_json::json!(rpc_error).to_string())
             };
-            println!("{}", color_treat(error_body.clone(), context.inner.colors.red));
+            println!(
+                "{}",
+                color_treat(error_body.clone(), context.inner.colors.red)
+            );
             let source_response = Response::builder()
                 .status(500)
                 .body(Body::from(error_body))
@@ -235,7 +267,7 @@ async fn handle_request(
         response_json,
         request_headers,
         copy_headers(source_response.headers()),
-        &context
+        &context,
     );
 
     Ok(source_response)
@@ -310,7 +342,11 @@ async fn main() {
     let dest_uri: Uri = match matches.value_of("RPC_ENDPOINT").unwrap().parse() {
         Ok(uri) => uri,
         Err(e) => {
-            eprintln!("Unable to parse Uri from {}: {}", matches.value_of("RPC_ENDPOINT").unwrap(), e);
+            eprintln!(
+                "Unable to parse Uri from {}: {}",
+                matches.value_of("RPC_ENDPOINT").unwrap(),
+                e
+            );
             return;
         }
     };

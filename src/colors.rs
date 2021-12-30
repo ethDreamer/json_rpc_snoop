@@ -1,5 +1,5 @@
-use termion::color;
 use lazy_static::lazy_static;
+use termion::color;
 
 lazy_static! {
     pub static ref RESET_NEWLINE: String = format!("{}\n", color::Fg(color::Reset));
