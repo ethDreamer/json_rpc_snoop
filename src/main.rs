@@ -30,6 +30,13 @@ struct SnoopContext {
     inner: Arc<Inner>,
 }
 
+fn remove_trailing_slashes(s: &str) -> &str {
+    match s.char_indices().next_back() {
+        Some((i, chr)) if chr == '/' => remove_trailing_slashes(&s[..i]),
+        _ => s,
+    }
+}
+
 fn get_hostport(uri: &Uri) -> HeaderValue {
     let mut hostport = String::new();
     if let Some(host) = uri.host() {
@@ -56,9 +63,13 @@ async fn copy_request(
         jsonxf::pretty_print(json_str).unwrap_or_else(|_| json_str.to_string())
     };
 
+    let mut dest_uri = remove_trailing_slashes(&context.inner.dest_uri.to_string()).to_string();
+    dest_uri.push_str(parts.uri.path());
+    let dest_uri = Uri::from_str(&dest_uri).unwrap_or_else(|_| context.inner.dest_uri.clone());
+
     let mut dest_request = Request::builder()
         .method(parts.method)
-        .uri(&context.inner.dest_uri)
+        .uri(&dest_uri)
         .body(Body::from(request_bytes))?;
 
     for (key, value) in parts.headers.iter() {
