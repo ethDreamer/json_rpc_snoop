@@ -4,7 +4,7 @@ use hyper::http::header::{HeaderMap, HeaderName, HeaderValue};
 use hyper::http::uri::Scheme;
 use hyper::server::conn::AddrStream;
 use hyper::service::{make_service_fn, service_fn};
-use hyper::{Body, Client, Request, Response, Server, Uri};
+use hyper::{Body, Client, Request, Response, Server, StatusCode, Uri};
 use hyper_tls::HttpsConnector;
 use std::collections::HashSet;
 use std::convert::Infallible;
@@ -105,8 +105,12 @@ async fn get_response(
 
     let response_json = {
         // Just return an error response if Utf8 conversion fails
-        let json_str = std::str::from_utf8(&response_bytes)?;
-        jsonxf::pretty_print(json_str).unwrap_or_else(|_| json_str.to_string())
+        if response_bytes.is_empty() {
+            "null".to_string()
+        } else {
+            let json_str = std::str::from_utf8(&response_bytes)?;
+            jsonxf::pretty_print(json_str).unwrap_or_else(|_| json_str.to_string())
+        }
     };
 
     let mut source_response = Response::builder()
@@ -129,6 +133,7 @@ fn print_request_response(
     request_headers: Vec<(HeaderName, HeaderValue)>,
     response_headers: Vec<(HeaderName, HeaderValue)>,
     context: &SnoopContext,
+    response_status: StatusCode,
 ) {
     let now = chrono::offset::Local::now()
         .format("%b %e %T%.3f %Y")
@@ -166,8 +171,9 @@ fn print_request_response(
                     color_treat(request_json, context.inner.colors.cyan)
                 );
                 println!(
-                    "{} RESPONSE\n{}{}",
+                    "{} RESPONSE (status {})\n{}{}",
                     now,
+                    response_status,
                     header_string(response_headers, context),
                     color_treat(response_json, context.inner.colors.red)
                 );
@@ -194,8 +200,9 @@ fn print_request_response(
                     color_treat(request_json, context.inner.colors.cyan)
                 );
                 println!(
-                    "{} RESPONSE\n{}{}",
+                    "{} RESPONSE (status {})\n{}{}",
                     now,
+                    response_status,
                     header_string(response_headers, context),
                     color_treat(response_json, context.inner.colors.green)
                 );
@@ -203,9 +210,9 @@ fn print_request_response(
         }
         (Err(e), err_res) => {
             println!(
-                "{} WARNING: request not formatted as JSON-RPC request [{}]:\n{}{}",
-                now,
+                "WARNING: request not formatted as JSON-RPC: {}\n{} REQUEST\n{}{}",
                 e,
+                now,
                 header_string(request_headers, context),
                 color_treat(request_json, context.inner.colors.cyan),
             );
@@ -214,8 +221,9 @@ fn print_request_response(
                 Err(_) => context.inner.colors.green,
             };
             println!(
-                "{} RESPONSE\n{}{}",
+                "{} RESPONSE (status {})\n{}{}",
                 now,
+                response_status,
                 header_string(response_headers, context),
                 color_treat(response_json, color)
             );
@@ -279,6 +287,7 @@ async fn handle_request(
         request_headers,
         copy_headers(source_response.headers()),
         &context,
+        source_response.status(),
     );
 
     Ok(source_response)
