@@ -6,12 +6,14 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+async-mutex = "1.4.0"
 chrono = "0.4.19"
-clap = "2.33.3"
+clap = "3.2.17"
 hyper = { version = "0.14.15", features = ["client", "http1", "server", "tcp"] }
 hyper-tls = "0.5.0"
 jsonxf = "1.1.1"
 lazy_static = "1.4.0"
+rand = "0.8.5"
 serde = { version = "1.0.130", features = ["derive"] }
 serde_json = "1.0.71"
 termion = "1.5.6"

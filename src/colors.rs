@@ -6,6 +6,7 @@ lazy_static! {
     pub static ref CYAN: String = color::Fg(color::Cyan).to_string();
     pub static ref RED: String = color::Fg(color::Red).to_string();
     pub static ref GREEN: String = color::Fg(color::Green).to_string();
+    pub static ref WHITE: String = color::Fg(color::White).to_string();
     pub static ref EMPTY: String = String::new();
 }
 
@@ -13,6 +14,7 @@ pub struct Colors {
     pub red: &'static str,
     pub cyan: &'static str,
     pub green: &'static str,
+    pub white: &'static str,
 }
 
 impl Colors {
@@ -22,12 +24,14 @@ impl Colors {
                 red: (*EMPTY).as_str(),
                 cyan: (*EMPTY).as_str(),
                 green: (*EMPTY).as_str(),
+                white: (*EMPTY).as_str(),
             }
         } else {
             Self {
                 red: (*RED).as_str(),
                 cyan: (*CYAN).as_str(),
                 green: (*GREEN).as_str(),
+                white: (*WHITE).as_str(),
             }
         }
     }
