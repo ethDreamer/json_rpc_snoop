@@ -20,20 +20,28 @@ use utils::{PacketType, RpcErrorResponse, RpcRequest, SnoopError, SuppressType};
 mod colors;
 use colors::{color_treat, Colors};
 
+#[derive(Debug)]
 struct Inner {
     dest_uri: Uri,
     rng: Mutex<rand::rngs::StdRng>,
     suppress_method: Option<HashMap<String, (i32, SuppressType)>>,
     suppress_path: Option<HashMap<String, (i32, SuppressType)>>,
+    override_rpc: Option<Vec<String>>,
     colors: Colors,
     drop_request_rate: f32,
     drop_response_rate: f32,
     log_headers: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct SnoopContext {
     inner: Arc<Inner>,
+}
+
+fn is_rpc_modules_request(request_json: &str) -> bool {
+    serde_json::from_str::<RpcRequest>(request_json)
+        .map(|rpc_request| rpc_request.method == "rpc_modules")
+        .unwrap_or(false)
 }
 
 fn get_hostport(uri: &Uri) -> HeaderValue {
@@ -47,6 +55,26 @@ fn get_hostport(uri: &Uri) -> HeaderValue {
     }
 
     HeaderValue::from_str(&hostport).expect("should be valid header")
+}
+
+fn get_rpc_modules_override(rpc_modules: &Vec<String>) -> (Response<Body>, String) {
+    let mut response_json = "{\n  \"jsonrpc\": \"2.0\",\n  \"result\": {\n".to_string();
+    if let Some(module) = rpc_modules.first() {
+        response_json.push_str(&format!("    \"{}\": \"1.0\"", module))
+    }
+    for module in rpc_modules.iter().skip(1) {
+        response_json.push_str(",\n");
+        response_json.push_str(&format!("    \"{}\": \"1.0\"", module));
+    }
+    response_json.push_str("\n  },\n  \"id\": 1\n}");
+
+    let response = Response::builder()
+        .status(200)
+        .header("content-type", "application/json")
+        .body(Body::from(response_json.clone()))
+        .unwrap();
+
+    (response, response_json)
 }
 
 async fn copy_request(
@@ -65,10 +93,15 @@ async fn copy_request(
         }
     };
 
-    let mut dest_request = if !parts.uri.path().eq("/") {
+    let construct_uri = !parts.uri.path().eq("/") || parts.uri.query().is_some();
+    let mut dest_request = if construct_uri {
         let mut dest_uri =
             utils::remove_trailing_slashes(&context.inner.dest_uri.to_string()).to_string();
         dest_uri.push_str(parts.uri.path());
+        if let Some(query) = parts.uri.query() {
+            dest_uri.push_str("?");
+            dest_uri.push_str(query);
+        }
         let dest_uri =
             utils::parse_uri(&dest_uri).unwrap_or_else(|_| context.inner.dest_uri.clone());
         Request::builder()
@@ -332,21 +365,26 @@ async fn handle_request(
         return Err("Request Dropped");
     }
 
-    let (source_response, response_json) = match get_response(dest_request, &context).await {
-        Ok(result) => result,
-        Err(e) => {
-            let error_body = {
-                let rpc_error = RpcErrorResponse::from(("Error processing response", e));
-                serde_json::to_string_pretty(&rpc_error)
-                    .unwrap_or_else(|_| serde_json::json!(rpc_error).to_string())
-            };
-            let source_response = Response::builder()
-                .status(500)
-                .body(Body::from(error_body.clone()))
-                .unwrap();
-            (source_response, error_body)
-        }
-    };
+    let (source_response, response_json) =
+        if context.inner.override_rpc.is_some() && is_rpc_modules_request(&request_json) {
+            get_rpc_modules_override(context.inner.override_rpc.as_ref().unwrap())
+        } else {
+            match get_response(dest_request, &context).await {
+                Ok(result) => result,
+                Err(e) => {
+                    let error_body = {
+                        let rpc_error = RpcErrorResponse::from(("Error processing response", e));
+                        serde_json::to_string_pretty(&rpc_error)
+                            .unwrap_or_else(|_| serde_json::json!(rpc_error).to_string())
+                    };
+                    let source_response = Response::builder()
+                        .status(500)
+                        .body(Body::from(error_body.clone()))
+                        .unwrap();
+                    (source_response, error_body)
+                }
+            }
+        };
     let response_headers = copy_headers(source_response.headers());
 
     match suppress_log(
@@ -476,6 +514,23 @@ async fn main() {
                 .takes_value(true)
         )
         .arg(
+            Arg::with_name("fix-geth-attach")
+                .short('f')
+                .long("fix-geth-attach")
+                .help("Override the results of the `rpc_modules` method. This is useful for attaching a geth console to RPC endpoints that don't support the `rpc_modules` method (e.g. infura/nethermind by default)")
+                .takes_value(false),
+        )
+        .arg(
+            Arg::with_name("rpc-modules-override")
+                .short('r')
+                .long("rpc-modules-override")
+                .requires("fix-geth-attach")
+                .help("Specify a list of rpc modules to return from the `rpc_modules` method. Default [eth,net,web3]")
+                .multiple(true)
+                .number_of_values(1)
+                .takes_value(true)
+        )
+        .arg(
             Arg::with_name("RPC_ENDPOINT")
                 .help("JSON-RPC endpoint to forward incoming requests")
                 .value_parser(utils::parse_uri)
@@ -505,6 +560,19 @@ async fn main() {
             drop_request_rate: *matches.get_one::<u32>("drop-request-rate").unwrap() as f32 / 100.0,
             drop_response_rate: *matches.get_one::<u32>("drop-response-rate").unwrap() as f32
                 / 100.0,
+            override_rpc: matches
+                .values_of("rpc-modules-override")
+                .map(|values| values.into_iter().map(|s| s.to_string()).collect())
+                .or(if matches.is_present("fix-geth-attach") {
+                    Some(
+                        vec!["eth", "net", "web3"]
+                            .into_iter()
+                            .map(Into::into)
+                            .collect(),
+                    )
+                } else {
+                    None
+                }),
             colors: Colors::new(matches.is_present("no-color")),
             log_headers: matches.is_present("log-headers"),
         }),

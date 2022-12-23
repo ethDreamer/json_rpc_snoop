@@ -35,7 +35,7 @@ pub struct RpcRequest {
     pub id: u64,
     pub jsonrpc: String,
     pub method: String,
-    pub params: Vec<serde_json::Value>,
+    pub params: Option<Vec<serde_json::Value>>,
 }
 #[derive(Debug, Deserialize, Serialize)]
 pub struct RpcError {
