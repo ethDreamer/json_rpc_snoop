@@ -10,6 +10,7 @@ lazy_static! {
     pub static ref EMPTY: String = String::new();
 }
 
+#[derive(Debug)]
 pub struct Colors {
     pub red: &'static str,
     pub cyan: &'static str,
