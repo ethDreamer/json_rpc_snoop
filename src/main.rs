@@ -307,7 +307,11 @@ async fn handle_request(
     _address: SocketAddr,
     source_request: Request<Body>,
 ) -> Result<Response<Body>, &'static str> {
-    let request_path = source_request.uri().path().to_string();
+    let mut request_path = source_request.uri().path().to_string();
+    if let Some(query) = source_request.uri().query() {
+        request_path.push_str("?");
+        request_path.push_str(query);
+    }
     let (dest_request, request_json) = match copy_request(source_request, &context).await {
         Ok(result) => result,
         Err(e) => {
