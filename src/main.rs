@@ -150,8 +150,15 @@ async fn get_response(
         if response_bytes.is_empty() {
             "null".to_string()
         } else {
-            let json_str = std::str::from_utf8(&response_bytes)?;
-            jsonxf::pretty_print(json_str).unwrap_or_else(|_| json_str.to_string())
+            match std::str::from_utf8(&response_bytes) {
+                Ok(json_str) => {
+                    jsonxf::pretty_print(json_str).unwrap_or_else(|_| json_str.to_string())
+                }
+                Err(_) => {
+                    // utf-8 error
+                    "binary response returned".to_string()
+                }
+            }
         }
     };
 
